@@ -69,7 +69,6 @@ var masterServices = sets.NewString("kubernetes")
 
 // PopulateEnvironmentVariables populates the environment of each container (and init container) in the specified pod.
 func PopulateEnvironmentVariables(ctx context.Context, pod *corev1.Pod, rm *manager.ResourceManager, recorder record.EventRecorder) error {
-
 	// Populate each init container's environment.
 	for idx := range pod.Spec.InitContainers {
 		if err := populateContainerEnvironment(ctx, pod, &pod.Spec.InitContainers[idx], rm, recorder); err != nil {
@@ -419,6 +418,8 @@ func getEnvironmentVariableValueWithValueFromSecretKeyRef(ctx context.Context, e
 	// Check whether the key reference is optional.
 	// This will control whether we fail when unable to read the requested key.
 	optional := vf != nil && vf.Optional != nil && *vf.Optional
+
+	vf.Name = strings.ReplaceAll(vf.Name, "\"", "")
 	// Try to grab the referenced secret.
 	s, err := rm.GetSecret(vf.Name, pod.Namespace)
 	if err != nil {
