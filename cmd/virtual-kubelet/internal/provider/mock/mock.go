@@ -83,6 +83,8 @@ func NewMockProviderMockConfig(config MockConfig, nodeName, operatingSystem stri
 		pods:               make(map[string]*v1.Pod),
 		config:             config,
 		startTime:          time.Now(),
+		// default notifier is a no-op to avoid nil deref if NotifyPods isn't called yet
+		notifier: func(*v1.Pod) {},
 	}
 
 	return &provider, nil
