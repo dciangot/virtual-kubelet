@@ -83,6 +83,8 @@ func NewMockProviderMockConfig(config MockConfig, nodeName, operatingSystem stri
 		pods:               make(map[string]*v1.Pod),
 		config:             config,
 		startTime:          time.Now(),
+		// default notifier is a no-op to avoid nil deref if NotifyPods isn't called yet
+		notifier: func(*v1.Pod) {},
 	}
 
 	return &provider, nil
@@ -191,7 +193,9 @@ func (p *MockProvider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 	}
 
 	p.pods[key] = pod
-	p.notifier(pod)
+	if p.notifier != nil {
+		p.notifier(pod)
+	}
 
 	return nil
 }
@@ -212,7 +216,9 @@ func (p *MockProvider) UpdatePod(ctx context.Context, pod *v1.Pod) error {
 	}
 
 	p.pods[key] = pod
-	p.notifier(pod)
+	if p.notifier != nil {
+		p.notifier(pod)
+	}
 
 	return nil
 }

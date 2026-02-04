@@ -1,6 +1,7 @@
 package framework
 
 import (
+	"os"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -33,6 +34,13 @@ func createKubeClient(kubeconfig string) *kubernetes.Clientset {
 		cfg *rest.Config
 		err error
 	)
+	// If no kubeconfig CLI flag was provided, prefer the KUBECONFIG environment variable
+	// before falling back to in-cluster config. This makes local runs against kind/minikube easier.
+	if kubeconfig == "" {
+		if env := os.Getenv("KUBECONFIG"); env != "" {
+			kubeconfig = env
+		}
+	}
 	if kubeconfig == "" {
 		cfg, err = rest.InClusterConfig()
 	} else {
