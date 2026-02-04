@@ -191,7 +191,9 @@ func (p *MockProvider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 	}
 
 	p.pods[key] = pod
-	p.notifier(pod)
+	if p.notifier != nil {
+		p.notifier(pod)
+	}
 
 	return nil
 }
@@ -212,7 +214,9 @@ func (p *MockProvider) UpdatePod(ctx context.Context, pod *v1.Pod) error {
 	}
 
 	p.pods[key] = pod
-	p.notifier(pod)
+	if p.notifier != nil {
+		p.notifier(pod)
+	}
 
 	return nil
 }

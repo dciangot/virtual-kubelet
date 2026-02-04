@@ -403,7 +403,11 @@ func (pc *PodController) Run(ctx context.Context, podSyncWorkers int) (retErr er
 				if !ok {
 					// Pods are only ever *added* to knownPods in the above AddFunc, and removed
 					// in the below *DeleteFunc*
-					panic("Pod not found in known pods. This should never happen.")
+					// It's possible the UID changed (recreated pod). In that case, fall back to enqueueing the new key
+					// and do not panic.
+					log.G(ctx).Warnf("pod key %s not present in knownPods; enqueuing for sync", key)
+					pc.syncPodsFromKubernetes.Enqueue(ctx, key)
+					return
 				}
 
 				kPod := obj.(*knownPod)
