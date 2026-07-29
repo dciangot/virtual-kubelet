@@ -52,6 +52,16 @@ func (p *uidProviderWrapper) GetPodStatusByUID(ctx context.Context, namespace, n
 	return p.GetPodStatus(ctx, namespace, name)
 }
 
+// NotifyPods forwards the notification callback to the underlying handler if it implements
+// PodNotifier. This ensures that legacy providers which also implement PodNotifier are
+// correctly recognised as an asyncProvider, so their notifier callback is wired up and
+// CreatePod/UpdatePod/DeletePod can call it without panicking on a nil function.
+func (p *uidProviderWrapper) NotifyPods(ctx context.Context, f func(*corev1.Pod)) {
+	if notifier, ok := p.PodLifecycleHandler.(PodNotifier); ok {
+		notifier.NotifyPods(ctx, f)
+	}
+}
+
 // uidBasedProvider wraps a PodUIDLifecycleHandler to implement PodLifecycleHandler, by stubbing
 // the legacy GetPod/GetPodStatus methods. These methods are never called if the provider implements
 // PodUIDLifecycleHandler, but are required to be implemented as PodControllerConfig takes a
