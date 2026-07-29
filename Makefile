@@ -1,15 +1,33 @@
-IMPORT_PATH := github.com/virtual-kubelet/virtual-kubelet
+SHELL := /bin/bash
+
 DOCKER_IMAGE := virtual-kubelet
 exec := $(DOCKER_IMAGE)
 github_repo := virtual-kubelet/virtual-kubelet
 binary := virtual-kubelet
-build_tags := "netgo osusergo $(VK_BUILD_TAGS)"
+
+GOTEST ?= go test $(if $V,-v)
+
+export GO111MODULE ?= on
+
+include Makefile.e2e
+# Currently this looks for a globally installed gobin. When we move to modules,
+# should consider installing it locally
+# Also, we will want to lock our tool versions using go mod:
+# https://github.com/golang/go/wiki/Modules#how-can-i-track-tool-dependencies-for-a-module
+gobin_tool ?= $(shell which gobin || echo $(GOPATH)/bin/gobin)
+goimports := golang.org/x/tools/cmd/goimports@release-branch.go1.15
+gocovmerge := github.com/wadey/gocovmerge@b5bfa59ec0adc420475f97f89b58045c721d761c
+goreleaser := github.com/goreleaser/goreleaser@v0.82.2
+gox := github.com/mitchellh/gox@v1.0.1
 
 # comment this line out for quieter things
-#V := 1 # When V is set, print commands and build progress.
+# V := 1 # When V is set, try to enable extra logging for debugging
 
 # Space separated patterns of packages to skip in list, test, format.
 IGNORED_PACKAGES := /vendor/
+
+TEST_OS := $(shell go env GOOS)
+TEST_ARCH := $(shell go env GOARCH)
 
 .PHONY: all
 all: test build
@@ -18,100 +36,91 @@ all: test build
 # safebuild builds inside a docker container with no clingons from your $GOPATH
 safebuild:
 	@echo "Building..."
-	$Q docker build --build-arg BUILD_TAGS=$(build_tags) -t $(DOCKER_IMAGE):$(VERSION) .
+	docker build --build-arg BUILD_TAGS="$(VK_BUILD_TAGS)" -t $(DOCKER_IMAGE):$(VERSION) .
 
 .PHONY: build
+build: build_tags := netgo osusergo
+build: OUTPUT_DIR ?= bin
 build: authors
 	@echo "Building..."
-	$Q CGO_ENABLED=0 go build -a --tags $(build_tags) -ldflags '-extldflags "-static"' -o bin/$(binary) $(if $V,-v) $(VERSION_FLAGS) $(IMPORT_PATH)
+	CGO_ENABLED=0 go build -ldflags '-extldflags "-static"' -o $(OUTPUT_DIR)/$(binary) $(if $V,-v) $(VERSION_FLAGS) ./cmd/$(binary)
 
 .PHONY: tags
 tags:
 	@echo "Listing tags..."
-	$Q @git tag
+	@git tag
 
 .PHONY: release
-release: build $(GOPATH)/bin/goreleaser
-	goreleaser
-
-
-### Code not in the repository root? Another binary? Add to the path like this.
-# .PHONY: otherbin
-# otherbin: .GOPATH/.ok
-#   $Q go install $(if $V,-v) $(VERSION_FLAGS) $(IMPORT_PATH)/cmd/otherbin
-
-##### ^^^^^^ EDIT ABOVE ^^^^^^ #####
+release: build goreleaser
+	$(gobin_tool) -run $(goreleaser)
 
 ##### =====> Utility targets <===== #####
 
-.PHONY: clean test list cover format docker deps
-
-deps: setup
-	@echo "Ensuring Dependencies..."
-	$Q go env
-	$Q dep ensure
+.PHONY: clean test list cover format docker
+mod:
+	@echo "Prune Dependencies..."
+	go mod tidy
 
 docker:
 	@echo "Docker Build..."
-	$Q docker build --build-arg BUILD_TAGS="$(VK_BUILD_TAGS)" -t $(DOCKER_IMAGE) .
+	docker build --build-arg BUILD_TAGS="$(VK_BUILD_TAGS)" -t $(DOCKER_IMAGE) .
 
 clean:
 	@echo "Clean..."
-	$Q rm -rf bin
+	rm -rf bin
 
+vet:
+	@echo "go vet'ing..."
+ifndef CI
+	@echo "go vet'ing Outside CI..."
+	go vet $(TESTDIRS)
+else
+	@echo "go vet'ing in CI..."
+	mkdir -p test
+	( go vet $(TESTDIRS); echo $$? ) | \
+       tee test/vet.txt | sed '$$ d'; exit $$(tail -1 test/vet.txt)
+endif
 
 test:
-	@echo "Testing..."
-	$Q go test $(if $V,-v) -i $(allpackages) # install -race libs to speed up next run
-ifndef CI
-	@echo "Testing Outside CI..."
-	$Q go vet $(allpackages)
-	$Q GODEBUG=cgocheck=2 go test $(allpackages)
-else
-	@echo "Testing in CI..."
-	$Q mkdir -p test
-	$Q ( go vet $(allpackages); echo $$? ) | \
-       tee test/vet.txt | sed '$$ d'; exit $$(tail -1 test/vet.txt)
-	$Q ( GODEBUG=cgocheck=2 go test -v $(allpackages); echo $$? ) | \
-       tee test/output.txt | sed '$$ d'; exit $$(tail -1 test/output.txt)
-endif
+	$(GOTEST) $(TESTDIRS)
 
 list:
 	@echo "List..."
-	@echo $(allpackages)
+	@echo $(TESTDIRS)
 
-cover: $(GOPATH)/bin/gocovmerge
+cover: gocovmerge
 	@echo "Coverage Report..."
 	@echo "NOTE: make cover does not exit 1 on failure, don't use it to check for tests success!"
-	$Q rm -f .GOPATH/cover/*.out cover/all.merged
+	rm -f .GOPATH/cover/*.out cover/all.merged
 	$(if $V,@echo "-- go test -coverpkg=./... -coverprofile=cover/... ./...")
-	@for MOD in $(allpackages); do \
-        go test -coverpkg=`echo $(allpackages)|tr " " ","` \
+	@for MOD in $(TESTDIRS); do \
+        go test -coverpkg=`echo $(TESTDIRS)|tr " " ","` \
             -coverprofile=cover/unit-`echo $$MOD|tr "/" "_"`.out \
             $$MOD 2>&1 | grep -v "no packages being tested depend on"; \
     done
-	$Q gocovmerge cover/*.out > cover/all.merged
+	$(gobin_tool) -run $(gocovmerge) cover/*.out > cover/all.merged
 ifndef CI
 	@echo "Coverage Report..."
-	$Q go tool cover -html .GOPATH/cover/all.merged
+	go tool cover -html .GOPATH/cover/all.merged
 else
 	@echo "Coverage Report In CI..."
-	$Q go tool cover -html .GOPATH/cover/all.merged -o .GOPATH/cover/all.html
+	go tool cover -html .GOPATH/cover/all.merged -o .GOPATH/cover/all.html
 endif
 	@echo ""
 	@echo "=====> Total test coverage: <====="
 	@echo ""
-	$Q go tool cover -func .GOPATH/cover/all.merged
+	go tool cover -func .GOPATH/cover/all.merged
 
-format: $(GOPATH)/bin/goimports
+format: goimports
 	@echo "Formatting..."
-	$Q find . -iname \*.go | grep -v \
-        -e "^$$" $(addprefix -e ,$(IGNORED_PACKAGES)) | xargs goimports -w
+	find . -iname \*.go | grep -v \
+        -e "^$$" $(addprefix -e ,$(IGNORED_PACKAGES)) | xargs $(gobin_tool) -run $(goimports) -w
 
 ##### =====> Internals <===== #####
 
 .PHONY: setup
-setup: clean
+setup: goimports gocovmerge goreleaser gox clean
+	env
 	@echo "Setup..."
 	if ! grep "/bin" .gitignore > /dev/null 2>&1; then \
         echo "/bin" >> .gitignore; \
@@ -119,52 +128,64 @@ setup: clean
 	if ! grep "/cover" .gitignore > /dev/null 2>&1; then \
         echo "/cover" >> .gitignore; \
     fi
-	if ! grep "/bin" .gitignore > /dev/null 2>&1; then \
-        echo "/bin" >> .gitignore; \
-    fi
-	if ! grep "/test" .gitignore > /dev/null 2>&1; then \
-        echo "/test" >> .gitignore; \
-    fi
 	mkdir -p cover
 	mkdir -p bin
 	mkdir -p test
-	go get -u github.com/golang/dep/cmd/dep
-	go get github.com/wadey/gocovmerge
-	go get golang.org/x/tools/cmd/goimports
-	go get github.com/mitchellh/gox
-	go get github.com/goreleaser/goreleaser
 
 VERSION          := $(shell git describe --tags --always --dirty="-dev")
 DATE             := $(shell date -u '+%Y-%m-%d-%H:%M UTC')
-VERSION_FLAGS    := -ldflags='-X "github.com/virtual-kubelet/virtual-kubelet/version.Version=$(VERSION)" -X "github.com/virtual-kubelet/virtual-kubelet/version.BuildTime=$(DATE)"'
+VERSION_FLAGS    := -ldflags='-X "main.buildVersion=$(VERSION)" -X "main.buildTime=$(DATE)"'
 
-# assuming go 1.9 here!!
-_allpackages = $(shell go list ./...)
+TESTDIRS ?= ./...
 
-# memoize allpackages, so that it's executed only once and only if used
-allpackages = $(if $(__allpackages),,$(eval __allpackages := $$(_allpackages)))$(__allpackages)
+.PHONY: goimports
+goimports: $(gobin_tool)
+	$(gobin_tool) -d $(goimports)
 
+.PHONY: gocovmerge
+gocovmerge: $(gobin_tool)
+	$(gobin_tool) -d $(gocovmerge)
 
-Q := $(if $V,,@)
+.PHONY: goreleaser
+goreleaser: $(gobin_tool)
+	$(gobin_tool) -d $(goreleaser)
 
+.PHONY: gox
+gox: $(gobin_tool)
+	# We make gox globally available, for people to use by hand
+	$(gobin_tool) $(gox)
 
-$(GOPATH)/bin/gocovmerge:
-	@echo "Checking Coverage Tool Installation..."
-	@test -d $(GOPATH)/src/github.com/wadey/gocovmerge || \
-        { echo "Vendored gocovmerge not found, try running 'make setup'..."; exit 1; }
-	$Q go install github.com/wadey/gocovmerge
-$(GOPATH)/bin/goimports:
-	@echo "Checking Import Tool Installation..."
-	@test -d $(GOPATH)/src/golang.org/x/tools/cmd/goimports || \
-        { echo "Vendored goimports not found, try running 'make setup'..."; exit 1; }
-	$Q go install golang.org/x/tools/cmd/goimports
-
-$(GOPATH)/bin/goreleaser:
-	go get -u github.com/goreleaser/goreleaser
+$(gobin_tool):
+	GO111MODULE=off go get -u github.com/myitcv/gobin
 
 authors:
-	$Q git log --all --format='%aN <%cE>' | sort -u  | sed -n '/github/!p' > GITAUTHORS
-	$Q cat AUTHORS GITAUTHORS  | sort -u > NEWAUTHORS
-	$Q mv NEWAUTHORS AUTHORS
-	$Q rm -f NEWAUTHORS
-	$Q rm -f GITAUTHORS
+	git log --all --format='%aN <%cE>' | sort -u  | sed -n '/github/!p' > GITAUTHORS
+	cat AUTHORS GITAUTHORS  | sort -u > NEWAUTHORS
+	mv NEWAUTHORS AUTHORS
+	rm -f NEWAUTHORS
+	rm -f GITAUTHORS
+
+SETUP_ENVTEST_VERSION ?= v0.0.0-20250604165838-d6126d850224
+ENVTEST_K8S_VERSION := 1.31.x
+
+ENVTEST ?= go run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+ENVTEST_DIR ?= $(shell pwd)/.envtest
+export KUBEBUILDER_ASSETS ?= $(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DIR) -p path)
+
+.PHONY: envtest
+envtest:
+	# You can add klog flags for debugging, like: -klog.v=10 -klog.logtostderr
+	# klogv2 flags just wraps our existing logrus.
+	$(GOTEST) -run=TestEnvtest ./node -envtest=true
+
+.PHONY: fmt
+fmt:
+	goimports -w $(shell go list -f '{{.Dir}}' ./...)
+
+
+export GOLANG_CI_LINT_VERSION ?= v1.49.0
+DOCKER_BUILD ?= docker buildx build
+
+.PHONY: lint
+lint:
+	$(DOCKER_BUILD) --target=lint --build-arg GOLANG_CI_LINT_VERSION --build-arg OUT_FORMAT .
