@@ -4,7 +4,6 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -68,10 +67,10 @@ func UIDBasedProvider(p PodUIDLifecycleHandler) PodLifecycleHandler {
 	return &uidBasedProvider{PodUIDLifecycleHandler: p}
 }
 
-func (p *uidBasedProvider) GetPod(ctx context.Context, namespace, name string) (*v1.Pod, error) {
+func (p *uidBasedProvider) GetPod(ctx context.Context, namespace, name string) (*corev1.Pod, error) {
 	panic("GetPod should never be called when GetPodByUID is implemented")
 }
 
-func (p *uidBasedProvider) GetPodStatus(ctx context.Context, namespace, name string) (*v1.PodStatus, error) {
+func (p *uidBasedProvider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
 	panic("GetPodStatus should never be called when GetPodStatusByUID is implemented")
 }

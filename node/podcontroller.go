@@ -304,8 +304,12 @@ func NewPodController(cfg PodControllerConfig) (*PodController, error) {
 	}
 
 	pc.syncPodsFromKubernetes = queue.New(cfg.SyncPodsFromKubernetesRateLimiter, "syncPodsFromKubernetes", pc.syncPodFromKubernetesHandler, shouldRetryWrapper(cfg.SyncPodsFromKubernetesShouldRetryFunc))
-	pc.deletePodsFromKubernetes = queue.New(cfg.DeletePodsFromKubernetesRateLimiter, "deletePodsFromKubernetes", pc.deletePodsFromKubernetesHandler, shouldRetryWrapper(cfg.DeletePodsFromKubernetesShouldRetryFunc))
-	pc.syncPodStatusFromProvider = queue.New(cfg.SyncPodStatusFromProviderRateLimiter, "syncPodStatusFromProvider", pc.syncPodStatusFromProviderHandler, shouldRetryWrapper(cfg.SyncPodStatusFromProviderShouldRetryFunc))
+	pc.deletePodsFromKubernetes = queue.New(
+		cfg.DeletePodsFromKubernetesRateLimiter, "deletePodsFromKubernetes",
+		pc.deletePodsFromKubernetesHandler, shouldRetryWrapper(cfg.DeletePodsFromKubernetesShouldRetryFunc))
+	pc.syncPodStatusFromProvider = queue.New(
+		cfg.SyncPodStatusFromProviderRateLimiter, "syncPodStatusFromProvider",
+		pc.syncPodStatusFromProviderHandler, shouldRetryWrapper(cfg.SyncPodStatusFromProviderShouldRetryFunc))
 
 	return pc, nil
 }

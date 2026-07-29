@@ -37,7 +37,7 @@ func ClientsetFromEnv(kubeConfigPath string) (*kubernetes.Clientset, error) {
 }
 
 func clientsetFromEnvKubeConfigPath(kubeConfigPath string) (*rest.Config, error) {
-	_, err := os.Stat(kubeConfigPath)
+	_, err := os.Stat(kubeConfigPath) //nolint:gosec // kubeConfigPath comes from KUBECONFIG env var, not user input
 	if os.IsNotExist(err) {
 		return rest.InClusterConfig()
 	}

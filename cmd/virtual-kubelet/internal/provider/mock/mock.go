@@ -691,7 +691,7 @@ func addAttributes(ctx context.Context, span trace.Span, attrs ...string) contex
 		return ctx
 	}
 	for i := 0; i < len(attrs); i += 2 {
-		ctx = span.WithField(ctx, attrs[i], attrs[i+1])
+		ctx = span.WithField(ctx, attrs[i], attrs[i+1]) //nolint:gosec // bounds guaranteed by even-length check above
 	}
 	return ctx
 }
