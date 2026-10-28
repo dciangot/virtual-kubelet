@@ -259,6 +259,11 @@ type NodeConfig struct {
 	// Providers need this if they need to do their own custom resolving
 	SkipDownwardAPIResolution bool
 
+	// PodControllerConfigOpts holds functions which mutate the node.PodControllerConfig
+	// just before the pod controller is created. They are applied in order and may return
+	// an error to abort node creation. Use WithPodControllerConfigOverrides to set these.
+	PodControllerConfigOpts []func(*node.PodControllerConfig) error
+
 	routeAttacher func(Provider, NodeConfig, corev1listers.PodLister)
 }
 
@@ -274,6 +279,18 @@ func WithNodeConfig(c NodeConfig) NodeOpt {
 func WithClient(c kubernetes.Interface) NodeOpt {
 	return func(cfg *NodeConfig) error {
 		cfg.Client = c
+		return nil
+	}
+}
+
+// WithPodControllerConfigOverrides returns a NodeOpt that registers functions to mutate the
+// node.PodControllerConfig just before the pod controller is created. This exposes lower-level
+// pod controller settings (for example the SyncPodsFromKubernetes rate limiter and retry policy)
+// without having to drop down to node.NewPodController directly. Overrides are applied in order
+// and may return an error to abort node creation.
+func WithPodControllerConfigOverrides(opts ...func(*node.PodControllerConfig) error) NodeOpt {
+	return func(cfg *NodeConfig) error {
+		cfg.PodControllerConfigOpts = append(cfg.PodControllerConfigOpts, opts...)
 		return nil
 	}
 }
@@ -397,7 +414,7 @@ func NewNode(name string, newProvider NewProviderFunc, opts ...NodeOpt) (*Node, 
 		cfg.EventRecorder = eb.NewRecorder(scheme.Scheme, v1.EventSource{Component: path.Join(name, "pod-controller")})
 	}
 
-	pc, err := node.NewPodController(node.PodControllerConfig{
+	podControllerConfig := node.PodControllerConfig{
 		PodClient:                 cfg.Client.CoreV1(),
 		EventRecorder:             cfg.EventRecorder,
 		Provider:                  p,
@@ -406,7 +423,14 @@ func NewNode(name string, newProvider NewProviderFunc, opts ...NodeOpt) (*Node, 
 		ConfigMapInformer:         configMapInformer,
 		ServiceInformer:           serviceInformer,
 		SkipDownwardAPIResolution: cfg.SkipDownwardAPIResolution,
-	})
+	}
+	for _, o := range cfg.PodControllerConfigOpts {
+		if err := o(&podControllerConfig); err != nil {
+			return nil, err
+		}
+	}
+
+	pc, err := node.NewPodController(podControllerConfig)
 	if err != nil {
 		return nil, errors.Wrap(err, "error creating pod controller")
 	}

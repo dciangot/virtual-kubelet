@@ -45,8 +45,7 @@ func Run(t *testing.T, ts TestSuite) {
 	// The implementation below is based on https://github.com/stretchr/testify
 	testFinder := reflect.TypeOf(ts)
 	tests := []testCase{}
-	for i := 0; i < testFinder.NumMethod(); i++ {
-		method := testFinder.Method(i)
+	for method := range testFinder.Methods() {
 		if !isValidTestFunc(method) {
 			continue
 		}
@@ -80,6 +79,6 @@ func failOnPanic(t *testing.T) {
 func isValidTestFunc(method reflect.Method) bool {
 	return strings.HasPrefix(method.Name, "Test") && // Test function name must start with "Test",
 		method.Type.NumIn() == 2 && // the number of function input should be 2 (*TestSuite ts and t *testing.T),
-		method.Type.In(1) == reflect.TypeOf(&testing.T{}) &&
+		method.Type.In(1) == reflect.TypeFor[*testing.T]() &&
 		method.Type.NumOut() == 0 // and the number of function output should be 0
 }

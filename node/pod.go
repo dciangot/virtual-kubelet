@@ -17,6 +17,11 @@ package node
 import (
 	"context"
 	"fmt"
+<<<<<<< HEAD
+=======
+	"sort"
+	"strings"
+>>>>>>> refs/remotes/upstream/main
 	"time"
 
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
@@ -28,6 +33,7 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/log"
 	"github.com/virtual-kubelet/virtual-kubelet/trace"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -99,8 +105,17 @@ func (pc *PodController) createOrUpdatePod(ctx context.Context, pod *corev1.Pod)
 	// Check if the pod is already known by the provider.
 	// NOTE: Some providers return a non-nil error in their GetPod implementation when the pod is not found while some other don't.
 	// Hence, we ignore the error and just act upon the pod if it is non-nil (meaning that the provider still knows about the pod).
+<<<<<<< HEAD
 	if podFromProvider, _ := pc.provider.GetPodByUID(ctx, pod.Namespace, pod.Name, pod.UID); podFromProvider != nil {
 		if !podsEqual(podFromProvider, podForProvider) {
+=======
+	if podFromProvider, _ := pc.provider.GetPod(ctx, pod.Namespace, pod.Name); podFromProvider != nil {
+		podsEqualForProvider := podsEqual
+		if !pc.skipDownwardAPIResolution {
+			podsEqualForProvider = podsEqualWithResolvedEnvs
+		}
+		if !podsEqualForProvider(podFromProvider, podForProvider) {
+>>>>>>> refs/remotes/upstream/main
 			log.G(ctx).Debugf("Pod %s exists, updating pod in provider", podFromProvider.Name)
 			if origErr := pc.provider.UpdatePod(ctx, podForProvider); origErr != nil {
 				pc.handleProviderError(ctx, span, origErr, pod)
@@ -135,15 +150,53 @@ func podsEqual(pod1, pod2 *corev1.Pod) bool {
 	// - `objectmeta.labels`
 	// - `objectmeta.annotations`
 	// compare the values of the pods to see if the values actually changed
+	//
+	// equality.Semantic is used here because providers may return empty but
+	// non-nil maps and slices where the pod received from Kubernetes has nil
+	// ones. Those are semantically the same, but comparing them with go-cmp
+	// reports a difference and triggers a needless UpdatePod call.
+	return equality.Semantic.DeepEqual(pod1.Spec.Containers, pod2.Spec.Containers) &&
+		equality.Semantic.DeepEqual(pod1.Spec.InitContainers, pod2.Spec.InitContainers) &&
+		equality.Semantic.DeepEqual(pod1.Spec.EphemeralContainers, pod2.Spec.EphemeralContainers) &&
+		equality.Semantic.DeepEqual(pod1.Spec.ActiveDeadlineSeconds, pod2.Spec.ActiveDeadlineSeconds) &&
+		equality.Semantic.DeepEqual(pod1.Spec.Tolerations, pod2.Spec.Tolerations) &&
+		equality.Semantic.DeepEqual(pod1.Labels, pod2.Labels) &&
+		equality.Semantic.DeepEqual(pod1.Annotations, pod2.Annotations)
+}
 
-	return cmp.Equal(pod1.Spec.Containers, pod2.Spec.Containers) &&
-		cmp.Equal(pod1.Spec.InitContainers, pod2.Spec.InitContainers) &&
-		cmp.Equal(pod1.Spec.EphemeralContainers, pod2.Spec.EphemeralContainers) &&
-		cmp.Equal(pod1.Spec.ActiveDeadlineSeconds, pod2.Spec.ActiveDeadlineSeconds) &&
-		cmp.Equal(pod1.Spec.Tolerations, pod2.Spec.Tolerations) &&
-		cmp.Equal(pod1.Labels, pod2.Labels) &&
-		cmp.Equal(pod1.Annotations, pod2.Annotations)
+func podsEqualWithResolvedEnvs(pod1, pod2 *corev1.Pod) bool {
+	pod1 = pod1.DeepCopy()
+	pod2 = pod2.DeepCopy()
 
+	for i := range pod1.Spec.Containers {
+		sortResolvedEnvVars(pod1.Spec.Containers[i].Env)
+	}
+	for i := range pod2.Spec.Containers {
+		sortResolvedEnvVars(pod2.Spec.Containers[i].Env)
+	}
+	for i := range pod1.Spec.InitContainers {
+		sortResolvedEnvVars(pod1.Spec.InitContainers[i].Env)
+	}
+	for i := range pod2.Spec.InitContainers {
+		sortResolvedEnvVars(pod2.Spec.InitContainers[i].Env)
+	}
+	for i := range pod1.Spec.EphemeralContainers {
+		sortResolvedEnvVars(pod1.Spec.EphemeralContainers[i].Env)
+	}
+	for i := range pod2.Spec.EphemeralContainers {
+		sortResolvedEnvVars(pod2.Spec.EphemeralContainers[i].Env)
+	}
+
+	return podsEqual(pod1, pod2)
+}
+
+func sortResolvedEnvVars(envs []corev1.EnvVar) {
+	sort.Slice(envs, func(i, j int) bool {
+		if envs[i].Name != envs[j].Name {
+			return envs[i].Name < envs[j].Name
+		}
+		return envs[i].Value < envs[j].Value
+	})
 }
 
 func deleteGraceTimeEqual(old, new *int64) bool {
@@ -260,11 +313,22 @@ func (pc *PodController) updatePodStatus(ctx context.Context, podFromKubernetes 
 		}
 	}
 
+	podToUpdate := podFromProvider
+	if _, ok := pc.provider.(syncWrapper); ok {
+		// A provider that implements only GetPodStatus reports a status and nothing else. The rest of podFromProvider
+		// is the copy of the pod syncProviderWrapper took from the informer before asking for that status, which can be
+		// older than podFromKubernetes. The pods/status subresource keeps the labels, annotations and finalizers of the
+		// pod it is sent, so sending that copy would revert any change made to them since. Put the reported status on
+		// the pod as the informer has it now instead.
+		podToUpdate = podFromKubernetes.DeepCopy()
+		podToUpdate.Status = podFromProvider.Status
+	}
+
 	// We need to do this because the other parts of the pod can be updated elsewhere. Since we're only updating
-	// the pod status, and we should be the sole writers of the pod status, we can blind overwrite it. Therefore
-	// we need to copy the pod and set ResourceVersion to 0.
-	podFromProvider.ResourceVersion = "0"
-	if _, err := pc.client.Pods(podFromKubernetes.Namespace).UpdateStatus(ctx, podFromProvider, metav1.UpdateOptions{}); err != nil && !errors.IsNotFound(err) {
+	// the pod status, and we should be the sole writers of the pod status, set the current ResourceVersion to
+	// satisfy optimistic concurrency requirements.
+	podToUpdate.ResourceVersion = podFromKubernetes.ResourceVersion
+	if _, err := pc.client.Pods(podFromKubernetes.Namespace).UpdateStatus(ctx, podToUpdate, metav1.UpdateOptions{}); err != nil && !errors.IsNotFound(err) {
 		span.SetStatus(err)
 		return pkgerrors.Wrap(err, "error while updating pod status in kubernetes")
 	}
@@ -294,8 +358,13 @@ func (pc *PodController) enqueuePodStatusUpdate(ctx context.Context, pod *corev1
 	key := newPodUIDKey(pod)
 	ctx = span.WithField(ctx, "key", key)
 
+<<<<<<< HEAD
 	var obj interface{}
 	err := wait.PollUntilContextCancel(ctx, notificationRetryPeriod, true, func(ctx context.Context) (bool, error) {
+=======
+	var obj any
+	err = wait.PollUntilContextCancel(ctx, notificationRetryPeriod, true, func(ctx context.Context) (bool, error) {
+>>>>>>> refs/remotes/upstream/main
 		var ok bool
 		obj, ok = pc.knownPods.Load(key)
 		if ok {
@@ -392,7 +461,7 @@ func (pc *PodController) deletePodsFromKubernetesHandler(ctx context.Context, ke
 	defer func() {
 		if retErr == nil {
 			if w, ok := pc.provider.(syncWrapper); ok {
-				w._deletePodKey(ctx, key)
+				w._deletePodKey(ctx, metaKey)
 			}
 		}
 	}()

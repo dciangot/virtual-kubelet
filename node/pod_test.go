@@ -29,7 +29,11 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+<<<<<<< HEAD
 	"k8s.io/apimachinery/pkg/util/uuid"
+=======
+	"k8s.io/apimachinery/pkg/util/validation/field"
+>>>>>>> refs/remotes/upstream/main
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	core "k8s.io/client-go/testing"
@@ -45,7 +49,7 @@ type TestController struct {
 }
 
 func newTestController() *TestController {
-	fk8s := fake.NewSimpleClientset()
+	fk8s := fake.NewClientset()
 
 	rm := testutil.FakeResourceManager()
 	p := newMockProvider()
@@ -137,6 +141,64 @@ func TestPodsDifferentIgnoreValue(t *testing.T) {
 	p2.Status.Phase = corev1.PodFailed
 
 	assert.Assert(t, podsEqual(p1, p2))
+}
+
+func TestPodsEqualNilVersusEmptyFields(t *testing.T) {
+	p1 := &corev1.Pod{
+		Spec: newPodSpec(),
+	}
+
+	// Providers may return empty but non-nil maps and slices where the pod
+	// received from Kubernetes has nil ones. Both mean the same thing and
+	// must not be reported as a spec change.
+	p2 := p1.DeepCopy()
+	p2.Labels = map[string]string{}
+	p2.Annotations = map[string]string{}
+	p2.Spec.Tolerations = []corev1.Toleration{}
+	p2.Spec.InitContainers = []corev1.Container{}
+	p2.Spec.EphemeralContainers = []corev1.EphemeralContainer{}
+	p2.Spec.Containers[0].Env = []corev1.EnvVar{}
+
+	assert.Assert(t, podsEqual(p1, p2))
+}
+
+func TestPodsDifferentNonEmptyVersusEmptyFields(t *testing.T) {
+	p1 := &corev1.Pod{
+		Spec: newPodSpec(),
+	}
+
+	// The nil versus empty relaxation must not hide actual changes.
+	testCases := []struct {
+		name   string
+		mutate func(pod *corev1.Pod)
+	}{
+		{
+			name:   "label added",
+			mutate: func(pod *corev1.Pod) { pod.Labels = map[string]string{"test": "test"} },
+		},
+		{
+			name:   "annotation added",
+			mutate: func(pod *corev1.Pod) { pod.Annotations = map[string]string{"test": "test"} },
+		},
+		{
+			name:   "toleration added",
+			mutate: func(pod *corev1.Pod) { pod.Spec.Tolerations = []corev1.Toleration{{Key: "test"}} },
+		},
+		{
+			name:   "env var added",
+			mutate: func(pod *corev1.Pod) { pod.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "TEST", Value: "test"}} },
+		},
+		{
+			name:   "container removed",
+			mutate: func(pod *corev1.Pod) { pod.Spec.Containers = []corev1.Container{} },
+		},
+	}
+
+	for _, tc := range testCases {
+		p2 := p1.DeepCopy()
+		tc.mutate(p2)
+		assert.Assert(t, !podsEqual(p1, p2), tc.name)
+	}
 }
 
 func TestPodShouldEnqueueDifferentDeleteTimeStamp(t *testing.T) {
@@ -310,6 +372,85 @@ func TestPodNoSpecChange(t *testing.T) {
 	assert.Check(t, is.Equal(svr.mock.updates.read(), 0))
 }
 
+func TestPodNoSpecChangeWithNilVersusEmptyFields(t *testing.T) {
+	svr := newTestController()
+
+	pod := &corev1.Pod{}
+	pod.Namespace = "default"
+	pod.Name = "nginx"
+	pod.Spec = newPodSpec()
+
+	err := svr.createOrUpdatePod(context.Background(), pod.DeepCopy())
+	assert.Check(t, is.Nil(err))
+	assert.Check(t, is.Equal(svr.mock.creates.read(), 1))
+	assert.Check(t, is.Equal(svr.mock.updates.read(), 0))
+
+	key, err := buildKey(pod)
+	assert.Check(t, is.Nil(err))
+	createdPod, ok := svr.mock.pods.Load(key)
+	assert.Check(t, ok)
+
+	// The pod resolved for the provider has empty but non-nil maps and
+	// slices, and some providers report nil for those instead. Both describe
+	// the same pod, so the provider should not be updated.
+	storedPod := createdPod.(*corev1.Pod).DeepCopy()
+	storedPod.Labels = map[string]string{}
+	storedPod.Annotations = map[string]string{}
+	storedPod.Spec.Tolerations = []corev1.Toleration{}
+	storedPod.Spec.Containers[0].Env = nil
+	storedPod.Spec.Containers[0].EnvFrom = nil
+	svr.mock.pods.Store(key, storedPod)
+
+	err = svr.createOrUpdatePod(context.Background(), pod.DeepCopy())
+	assert.Check(t, is.Nil(err))
+
+	// createOrUpdate didn't call CreatePod or UpdatePod, spec didn't change
+	assert.Check(t, is.Equal(svr.mock.creates.read(), 1))
+	assert.Check(t, is.Equal(svr.mock.updates.read(), 0))
+}
+
+func TestPodNoSpecChangeWithResolvedEnvOrderDifference(t *testing.T) {
+	svr := newTestController()
+	svr.resourceManager = testutil.FakeResourceManager(testutil.FakeConfigMap("default", "pod-env", map[string]string{
+		"ALPHA": "1",
+		"BETA":  "2",
+	}))
+
+	pod := &corev1.Pod{}
+	pod.Namespace = "default"
+	pod.Name = "nginx"
+	pod.Spec = newPodSpec()
+	pod.Spec.EnableServiceLinks = new(false)
+	pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{
+		ConfigMapRef: &corev1.ConfigMapEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "pod-env"},
+		},
+	}}
+
+	err := svr.createOrUpdatePod(context.Background(), pod.DeepCopy())
+	assert.Check(t, is.Nil(err))
+	assert.Check(t, is.Equal(svr.mock.creates.read(), 1))
+	assert.Check(t, is.Equal(svr.mock.updates.read(), 0))
+
+	key, err := buildKey(pod)
+	assert.Check(t, is.Nil(err))
+	createdPod, ok := svr.mock.pods.Load(key)
+	assert.Check(t, ok)
+
+	storedPod := createdPod.(*corev1.Pod).DeepCopy()
+	storedPod.Spec.Containers[0].Env = []corev1.EnvVar{
+		storedPod.Spec.Containers[0].Env[1],
+		storedPod.Spec.Containers[0].Env[0],
+	}
+	svr.mock.pods.Store(key, storedPod)
+
+	err = svr.createOrUpdatePod(context.Background(), pod.DeepCopy())
+	assert.Check(t, is.Nil(err))
+
+	assert.Check(t, is.Equal(svr.mock.creates.read(), 1))
+	assert.Check(t, is.Equal(svr.mock.updates.read(), 0))
+}
+
 func TestPodStatusDelete(t *testing.T) {
 	ctx := context.Background()
 	c := newTestController()
@@ -318,7 +459,7 @@ func TestPodStatusDelete(t *testing.T) {
 	pod.Name = "nginx"
 	pod.UID = uuid.NewUUID()
 	pod.Spec = newPodSpec()
-	fk8s := fake.NewSimpleClientset(pod)
+	fk8s := fake.NewClientset(pod)
 	c.client = fk8s
 	c.PodController.client = fk8s.CoreV1()
 	podCopy := pod.DeepCopy()
@@ -375,6 +516,158 @@ func TestPodStatusDelete(t *testing.T) {
 		t.Fatalf("Pod status %v update failed", key)
 	}
 	t.Logf("pod updated, container status: %+v, pod delete Time: %v", newPod.Status.ContainerStatuses[0].State.Terminated, newPod.DeletionTimestamp)
+}
+
+func TestUpdatePodStatusUsesKubernetesResourceVersion(t *testing.T) {
+	ctx := context.Background()
+	c := newTestController()
+
+	k8sPod := &corev1.Pod{}
+	k8sPod.Namespace = "default"
+	k8sPod.Name = "nginx"
+	k8sPod.ResourceVersion = "123"
+	k8sPod.Spec = newPodSpec()
+
+	fk8s := fake.NewClientset(k8sPod)
+	c.client = fk8s
+	c.PodController.client = fk8s.CoreV1()
+
+	podFromKubernetes := k8sPod.DeepCopy()
+	podFromKubernetes.ResourceVersion = "123"
+
+	podFromProvider := k8sPod.DeepCopy()
+	podFromProvider.ResourceVersion = "provider-rv"
+	podFromProvider.Status.Phase = corev1.PodRunning
+
+	key := fmt.Sprintf("%s/%s", k8sPod.Namespace, k8sPod.Name)
+	c.knownPods.Store(key, &knownPod{lastPodStatusReceivedFromProvider: podFromProvider})
+
+	var gotResourceVersion string
+	c.client.PrependReactor("update", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+		update, ok := action.(core.UpdateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		updatedPod, ok := update.GetObject().(*corev1.Pod)
+		if !ok {
+			t.Fatalf("expected pod object, got %T", update.GetObject())
+		}
+		gotResourceVersion = updatedPod.ResourceVersion
+		return false, nil, nil
+	})
+
+	err := c.updatePodStatus(ctx, podFromKubernetes, key)
+	assert.Check(t, is.Nil(err))
+	assert.Check(t, is.Equal(gotResourceVersion, podFromKubernetes.ResourceVersion))
+}
+
+// TestUpdatePodStatusRejectsZeroResourceVersion replicates the apiserver error:
+//
+//	metadata.resourceVersion: Invalid value: 0: must be specified for an update
+//
+// This validation has existed since Kubernetes 1.3 — the generic registry Store.Update rejects
+// resourceVersion="0" (integer 0 after parsing) for any update, including UpdateStatus.
+// The reactor simulates that validation. With the fix at node/pod.go:252 the test passes
+// because the Kubernetes ResourceVersion ("123") is copied onto the provider pod before the
+// UpdateStatus call. To observe the error locally, temporarily comment out line 252 and re-run
+// this test — it will fail with the simulated validation error.
+func TestUpdatePodStatusRejectsZeroResourceVersion(t *testing.T) {
+	ctx := context.Background()
+	c := newTestController()
+
+	k8sPod := &corev1.Pod{}
+	k8sPod.Namespace = "default"
+	k8sPod.Name = "nginx"
+	k8sPod.ResourceVersion = "123"
+	k8sPod.Spec = newPodSpec()
+
+	fk8s := fake.NewClientset(k8sPod)
+	c.client = fk8s
+	c.PodController.client = fk8s.CoreV1()
+
+	podFromKubernetes := k8sPod.DeepCopy()
+
+	// Simulate what the provider returns: ResourceVersion "0" (the pre-fix state that
+	// triggered the 1.34 apiserver rejection).
+	podFromProvider := k8sPod.DeepCopy()
+	podFromProvider.ResourceVersion = "0"
+	podFromProvider.Status.Phase = corev1.PodRunning
+
+	key := fmt.Sprintf("%s/%s", k8sPod.Namespace, k8sPod.Name)
+	c.knownPods.Store(key, &knownPod{lastPodStatusReceivedFromProvider: podFromProvider})
+
+	// Reactor that mirrors the 1.34 apiserver: reject any UpdateStatus where
+	// metadata.resourceVersion is "0" or empty.
+	c.client.PrependReactor("update", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+		update, ok := action.(core.UpdateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		updatedPod, ok := update.GetObject().(*corev1.Pod)
+		if !ok {
+			return false, nil, nil
+		}
+		rv := updatedPod.ResourceVersion
+		if rv == "0" || rv == "" {
+			return true, nil, errors.NewInvalid(
+				schema.GroupKind{Group: "", Kind: "Pod"},
+				updatedPod.Name,
+				field.ErrorList{
+					field.Invalid(
+						field.NewPath("metadata").Child("resourceVersion"),
+						rv,
+						"must be specified for an update",
+					),
+				},
+			)
+		}
+		return false, nil, nil
+	})
+
+	err := c.updatePodStatus(ctx, podFromKubernetes, key)
+	assert.Check(t, is.Nil(err), "expected no error: fix at node/pod.go:252 should copy the Kubernetes ResourceVersion onto the provider pod before UpdateStatus")
+}
+
+// TestUpdatePodStatusFromSyncProviderKeepsMetadata covers a provider that implements only
+// GetPodStatus. syncProviderWrapper puts the status it reports on a copy of the pod taken from the
+// informer before it asked, so by the time updatePodStatus writes, the pod in Kubernetes can carry
+// labels and annotations that copy lacks. The pods/status subresource keeps the labels and
+// annotations of the pod it is sent, so writing the copy would revert them.
+func TestUpdatePodStatusFromSyncProviderKeepsMetadata(t *testing.T) {
+	ctx := context.Background()
+	c := newTestController()
+	c.provider = &syncProviderWrapper{PodLifecycleHandler: newSyncMockProvider()}
+
+	k8sPod := &corev1.Pod{}
+	k8sPod.Namespace = "default"
+	k8sPod.Name = "nginx"
+	k8sPod.ResourceVersion = "124"
+	k8sPod.Labels = map[string]string{"app": "nginx", "role": "leader"}
+	k8sPod.Annotations = map[string]string{"controller.kubernetes.io/pod-deletion-cost": "1000"}
+	k8sPod.Spec = newPodSpec()
+
+	fk8s := fake.NewClientset(k8sPod)
+	c.client = fk8s
+	c.PodController.client = fk8s.CoreV1()
+
+	// The copy syncProviderWrapper took before the label was added and the annotation changed.
+	podFromProvider := k8sPod.DeepCopy()
+	podFromProvider.ResourceVersion = "123"
+	podFromProvider.Labels = map[string]string{"app": "nginx"}
+	podFromProvider.Annotations = map[string]string{"controller.kubernetes.io/pod-deletion-cost": "201"}
+	podFromProvider.Status.Phase = corev1.PodRunning
+
+	key := fmt.Sprintf("%s/%s", k8sPod.Namespace, k8sPod.Name)
+	c.knownPods.Store(key, &knownPod{lastPodStatusReceivedFromProvider: podFromProvider})
+
+	err := c.updatePodStatus(ctx, k8sPod.DeepCopy(), key)
+	assert.NilError(t, err)
+
+	got, err := c.client.CoreV1().Pods(k8sPod.Namespace).Get(ctx, k8sPod.Name, v1.GetOptions{})
+	assert.NilError(t, err)
+	assert.Check(t, is.Equal(got.Status.Phase, corev1.PodRunning))
+	assert.Check(t, is.DeepEqual(got.Labels, k8sPod.Labels))
+	assert.Check(t, is.DeepEqual(got.Annotations, k8sPod.Annotations))
 }
 
 func TestReCreatePodRace(t *testing.T) {
@@ -503,7 +796,7 @@ func TestUpdatePodStatusWithNilProviderStatus(t *testing.T) {
 	pod.Spec = newPodSpec()
 	pod.UID = uuid.NewUUID()
 
-	fk8s := fake.NewSimpleClientset(pod)
+	fk8s := fake.NewClientset(pod)
 	c.client = fk8s
 	c.PodController.client = fk8s.CoreV1()
 
@@ -528,6 +821,26 @@ func TestUpdatePodStatusWithNilProviderStatus(t *testing.T) {
 	}
 
 	t.Log("Successfully handled nil lastPodStatusReceivedFromProvider case")
+}
+
+// TestDeletedPodsMapCleansUpOnSyncProvider is a test for #1045:
+// the deletedPods map in syncProviderWrapper leaked one entry per pod deletion.
+func TestDeletedPodsMapCleansUpOnSyncProvider(t *testing.T) {
+	ctx := context.Background()
+
+	lister := kubeinformers.NewSharedInformerFactory(fake.NewClientset(), 0).Core().V1().Pods().Lister()
+	wrapper := &syncProviderWrapper{}
+	pc := &PodController{provider: wrapper, podsLister: lister}
+
+	const metaKey = "default/any-pod"
+	wrapper.deletedPods.Store(metaKey, struct{}{})
+
+	if err := pc.deletePodsFromKubernetesHandler(ctx, metaKey+"/any-uid"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stillExists := wrapper.deletedPods.Load(metaKey)
+	assert.Assert(t, !stillExists)
 }
 
 func newPodSpec() corev1.PodSpec {

@@ -17,15 +17,11 @@ import (
 	is "gotest.tools/assert/cmp"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
+	"k8s.io/utils/ptr"
 )
 
-func durationPtr(d time.Duration) *time.Duration {
-	return &d
-}
-
 func TestQueueMaxRetries(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 	ctx = log.WithLogger(ctx, logruslogger.FromLogrus(logrus.NewEntry(logger)))
@@ -51,8 +47,7 @@ func TestQueueMaxRetries(t *testing.T) {
 }
 
 func TestQueueCustomRetries(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 	ctx = log.WithLogger(ctx, logruslogger.FromLogrus(logrus.NewEntry(logger)))
@@ -71,7 +66,7 @@ func TestQueueCustomRetries(t *testing.T) {
 		var sleepTime *time.Duration
 		if errors.Is(err, retryTestError) {
 			errorSeen++
-			sleepTime = durationPtr(10 * time.Millisecond)
+			sleepTime = ptr.To(10 * time.Millisecond)
 		}
 		_, retErr := DefaultRetryFunc(ctx, key, timesTried, originallyAdded, err)
 		return sleepTime, retErr
@@ -82,7 +77,7 @@ func TestQueueCustomRetries(t *testing.T) {
 	timeTaken := func(key string) time.Duration {
 		start := time.Now()
 		wq.Enqueue(context.TODO(), key)
-		for i := 0; i < MaxRetries; i++ {
+		for range MaxRetries {
 			assert.Assert(t, wq.handleQueueItem(ctx))
 		}
 		return time.Since(start)
@@ -141,8 +136,8 @@ func TestQueueItemNoSleep(t *testing.T) {
 	}, nil)
 
 	q.lock.Lock()
-	q.insert(ctx, "foo", false, durationPtr(-1*time.Hour))
-	q.insert(ctx, "bar", false, durationPtr(-1*time.Hour))
+	q.insert(ctx, "foo", false, ptr.To(-1*time.Hour))
+	q.insert(ctx, "bar", false, ptr.To(-1*time.Hour))
 	q.lock.Unlock()
 
 	item, err := q.getNextItem(ctx)
@@ -164,8 +159,8 @@ func TestQueueItemSleep(t *testing.T) {
 		return nil
 	}, nil)
 	q.lock.Lock()
-	q.insert(ctx, "foo", false, durationPtr(100*time.Millisecond))
-	q.insert(ctx, "bar", false, durationPtr(100*time.Millisecond))
+	q.insert(ctx, "foo", false, ptr.To(100*time.Millisecond))
+	q.insert(ctx, "bar", false, ptr.To(100*time.Millisecond))
 	q.lock.Unlock()
 
 	item, err := q.getNextItem(ctx)
@@ -206,7 +201,7 @@ func TestQueueBackgroundAdvance(t *testing.T) {
 	}, nil)
 	start := time.Now()
 	q.lock.Lock()
-	q.insert(ctx, "foo", false, durationPtr(10*time.Second))
+	q.insert(ctx, "foo", false, ptr.To(10*time.Second))
 	q.lock.Unlock()
 
 	time.AfterFunc(200*time.Millisecond, func() {
@@ -228,11 +223,16 @@ func TestQueueRedirty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
 	defer cancel()
 
+<<<<<<< HEAD
 	var times int64
 	var q *Queue[string]
+=======
+	var times atomic.Int64
+	var q *Queue
+>>>>>>> refs/remotes/upstream/main
 	q = New(workqueue.DefaultTypedItemBasedRateLimiter[any](), t.Name(), func(ctx context.Context, key string) error {
 		assert.Assert(t, is.Equal(key, "foo"))
-		if atomic.AddInt64(&times, 1) == 1 {
+		if times.Add(1) == 1 {
 			q.EnqueueWithoutRateLimit(context.TODO(), "foo")
 		} else {
 			cancel()
@@ -245,7 +245,7 @@ func TestQueueRedirty(t *testing.T) {
 	for !q.Empty() {
 		time.Sleep(100 * time.Millisecond)
 	}
-	assert.Assert(t, is.Equal(atomic.LoadInt64(&times), int64(2)))
+	assert.Assert(t, is.Equal(times.Load(), int64(2)))
 }
 
 func TestHeapConcurrency(t *testing.T) {
@@ -261,7 +261,7 @@ func TestHeapConcurrency(t *testing.T) {
 		time.Sleep(time.Second)
 		return nil
 	}, nil)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		q.EnqueueWithoutRateLimit(context.TODO(), strconv.Itoa(i))
 	}
 
@@ -272,7 +272,7 @@ func TestHeapConcurrency(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		_, ok := seen.Load(strconv.Itoa(i))
 		assert.Assert(t, ok, "Did not observe: %d", i)
 	}
@@ -320,7 +320,7 @@ type rateLimitWrapper struct {
 	rl           workqueue.TypedRateLimiter[any]
 }
 
-func (r *rateLimitWrapper) When(item interface{}) time.Duration {
+func (r *rateLimitWrapper) When(item any) time.Duration {
 	if _, ok := r.forgottenMap.Load(item); ok {
 		r.forgottenMap.Delete(item)
 		// Reset the added map
@@ -335,12 +335,12 @@ func (r *rateLimitWrapper) When(item interface{}) time.Duration {
 	return r.rl.When(item)
 }
 
-func (r *rateLimitWrapper) Forget(item interface{}) {
+func (r *rateLimitWrapper) Forget(item any) {
 	r.forgottenMap.Store(item, struct{}{})
 	r.rl.Forget(item)
 }
 
-func (r *rateLimitWrapper) NumRequeues(item interface{}) int {
+func (r *rateLimitWrapper) NumRequeues(item any) int {
 	return r.rl.NumRequeues(item)
 }
 
@@ -369,7 +369,7 @@ func TestRateLimiter(t *testing.T) {
 	}, nil)
 
 	enqueued := 0
-	syncMap.Range(func(key, value interface{}) bool {
+	syncMap.Range(func(key, value any) bool {
 		enqueued++
 		q.Enqueue(context.TODO(), key.(string))
 		return true
@@ -383,7 +383,7 @@ func TestRateLimiter(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		incomplete = false
 		// Wait for all items to finish processing.
-		syncMap.Range(func(key, value interface{}) bool {
+		syncMap.Range(func(key, value any) bool {
 			if value.(int) < 10 {
 				incomplete = true
 			}
@@ -397,7 +397,7 @@ func TestRateLimiter(t *testing.T) {
 	assert.Assert(t, time.Since(start) < 2*9*100*time.Millisecond)
 
 	// Make sure each item was seen. And Forgotten.
-	syncMap.Range(func(key, value interface{}) bool {
+	syncMap.Range(func(key, value any) bool {
 		_, ok := ratelimiter.forgottenMap.Load(key)
 		assert.Assert(t, ok, "%s in forgotten map", key)
 		val, ok := ratelimiter.addedMap.Load(key)
@@ -416,14 +416,18 @@ func TestRateLimiter(t *testing.T) {
 
 func TestQueueForgetInProgress(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
+<<<<<<< HEAD
 	var times int64
 	var q *Queue[string]
+=======
+	var times atomic.Int64
+	var q *Queue
+>>>>>>> refs/remotes/upstream/main
 	q = New(workqueue.DefaultTypedItemBasedRateLimiter[any](), t.Name(), func(ctx context.Context, key string) error {
 		assert.Assert(t, is.Equal(key, "foo"))
-		atomic.AddInt64(&times, 1)
+		times.Add(1)
 		q.Forget(context.TODO(), key)
 		return errors.New("test")
 	}, nil)
@@ -433,13 +437,12 @@ func TestQueueForgetInProgress(t *testing.T) {
 	for !q.Empty() {
 		time.Sleep(100 * time.Millisecond)
 	}
-	assert.Assert(t, is.Equal(atomic.LoadInt64(&times), int64(1)))
+	assert.Assert(t, is.Equal(times.Load(), int64(1)))
 }
 
 func TestQueueForgetBeforeStart(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	q := New(workqueue.DefaultTypedItemBasedRateLimiter[any](), t.Name(), func(ctx context.Context, key string) error {
 		panic("shouldn't be called")
@@ -456,28 +459,27 @@ func TestQueueForgetBeforeStart(t *testing.T) {
 func TestQueueMoveItem(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	q := New(workqueue.DefaultTypedItemBasedRateLimiter[any](), t.Name(), func(ctx context.Context, key string) error {
 		panic("shouldn't be called")
 	}, nil)
 	q.clock = nonmovingClock{}
 
-	q.insert(ctx, "foo", false, durationPtr(3000))
-	q.insert(ctx, "bar", false, durationPtr(2000))
-	q.insert(ctx, "baz", false, durationPtr(1000))
+	q.insert(ctx, "foo", false, ptr.To(time.Duration(3000)))
+	q.insert(ctx, "bar", false, ptr.To(time.Duration(2000)))
+	q.insert(ctx, "baz", false, ptr.To(time.Duration(1000)))
 	checkConsistency(t, q)
 	t.Log(q)
 
-	q.insert(ctx, "foo", false, durationPtr(2000))
+	q.insert(ctx, "foo", false, ptr.To(time.Duration(2000)))
 	checkConsistency(t, q)
 	t.Log(q)
 
-	q.insert(ctx, "foo", false, durationPtr(1999))
+	q.insert(ctx, "foo", false, ptr.To(time.Duration(1999)))
 	checkConsistency(t, q)
 	t.Log(q)
 
-	q.insert(ctx, "foo", false, durationPtr(999))
+	q.insert(ctx, "foo", false, ptr.To(time.Duration(999)))
 	checkConsistency(t, q)
 	t.Log(q)
 }

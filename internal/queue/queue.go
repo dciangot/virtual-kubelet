@@ -131,7 +131,7 @@ func (q *Queue[K]) Forget(ctx context.Context, key K) {
 	ctx, span := trace.StartSpan(ctx, "Forget")
 	defer span.End()
 
-	ctx = span.WithFields(ctx, map[string]interface{}{
+	ctx = span.WithFields(ctx, map[string]any{
 		"queue": q.name,
 		"key":   key,
 	})
@@ -168,7 +168,7 @@ func (q *Queue[K]) insert(ctx context.Context, key K, ratelimit bool, delay *tim
 	ctx, span := trace.StartSpan(ctx, "insert")
 	defer span.End()
 
-	ctx = span.WithFields(ctx, map[string]interface{}{
+	ctx = span.WithFields(ctx, map[string]any{
 		"queue":     q.name,
 		"key":       key,
 		"ratelimit": ratelimit,
@@ -331,7 +331,7 @@ func (q *Queue[K]) Run(ctx context.Context, workers int) {
 	defer cancel()
 
 	group := &wait.Group{}
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		// This is required because i is referencing a mutable variable and that's running in a separate goroutine
 		idx := i
 		group.StartWithContext(ctx, func(ctx context.Context) {
@@ -342,8 +342,13 @@ func (q *Queue[K]) Run(ctx context.Context, workers int) {
 	<-ctx.Done()
 }
 
+<<<<<<< HEAD
 func (q *Queue[K]) worker(ctx context.Context, i int) {
 	ctx = log.WithLogger(ctx, log.G(ctx).WithFields(map[string]interface{}{
+=======
+func (q *Queue) worker(ctx context.Context, i int) {
+	ctx = log.WithLogger(ctx, log.G(ctx).WithFields(map[string]any{
+>>>>>>> refs/remotes/upstream/main
 		"workerId": i,
 		"queue":    q.name,
 	}))
@@ -436,7 +441,7 @@ func (q *Queue[K]) handleQueueItemObject(ctx context.Context, qi *queueItem[K]) 
 	ctx, span := trace.StartSpan(ctx, "handleQueueItemObject")
 	defer span.End()
 
-	ctx = span.WithFields(ctx, map[string]interface{}{
+	ctx = span.WithFields(ctx, map[string]any{
 		"requeues":        qi.requeues,
 		"originallyAdded": qi.originallyAdded.String(),
 		"addedViaRedirty": qi.addedViaRedirty,

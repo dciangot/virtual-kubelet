@@ -690,8 +690,14 @@ func addAttributes(ctx context.Context, span trace.Span, attrs ...string) contex
 	if len(attrs)%2 == 1 {
 		return ctx
 	}
+<<<<<<< HEAD
 	for i := 0; i < len(attrs); i += 2 {
 		ctx = span.WithField(ctx, attrs[i], attrs[i+1]) //nolint:gosec // bounds guaranteed by even-length check above
+=======
+	for len(attrs) >= 2 {
+		ctx = span.WithField(ctx, attrs[0], attrs[1])
+		attrs = attrs[2:]
+>>>>>>> refs/remotes/upstream/main
 	}
 	return ctx
 }

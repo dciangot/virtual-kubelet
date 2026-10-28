@@ -42,7 +42,7 @@ func testNodeRun(t *testing.T, enableLease bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := testclient.NewSimpleClientset()
+	c := testclient.NewClientset()
 
 	testP := &testNodeProvider{NodeProvider: &NaiveNodeProvider{}}
 
@@ -90,7 +90,7 @@ func testNodeRun(t *testing.T, enableLease bool) {
 	)
 
 	timeout := time.After(30 * time.Second)
-	for i := 0; i < iters; i++ {
+	for range iters {
 		var l *coordinationv1.Lease
 
 		select {
@@ -173,7 +173,7 @@ func testNodeRun(t *testing.T, enableLease bool) {
 }
 
 func TestNodeCustomUpdateStatusErrorHandler(t *testing.T) {
-	c := testclient.NewSimpleClientset()
+	c := testclient.NewClientset()
 	testP := &testNodeProvider{NodeProvider: &NaiveNodeProvider{}}
 	nodes := c.CoreV1().Nodes()
 
@@ -224,7 +224,7 @@ func TestUpdateNodeStatus(t *testing.T) {
 		LastHeartbeatTime: metav1.Now().Rfc3339Copy(),
 	})
 	n.Status.Phase = corev1.NodePending
-	nodes := testclient.NewSimpleClientset().CoreV1().Nodes()
+	nodes := testclient.NewClientset().CoreV1().Nodes()
 
 	ctx := context.Background()
 	_, err := updateNodeStatus(ctx, nodes, n.DeepCopy())
@@ -275,7 +275,7 @@ func TestPingAfterStatusUpdate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := testclient.NewSimpleClientset()
+	c := testclient.NewClientset()
 	nodes := c.CoreV1().Nodes()
 
 	testP := &testNodeProviderPing{}
@@ -331,7 +331,7 @@ func TestBeforeAnnotationsPreserved(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := testclient.NewSimpleClientset()
+	c := testclient.NewClientset()
 
 	testP := &testNodeProvider{NodeProvider: &NaiveNodeProvider{}}
 
@@ -363,6 +363,14 @@ func TestBeforeAnnotationsPreserved(t *testing.T) {
 	}()
 
 	go node.Run(ctx) //nolint:errcheck
+
+	select {
+	case <-node.Ready():
+	case <-node.Done():
+		t.Fatalf("node.Run returned before becoming ready: %v", node.Err())
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for node to be ready")
+	}
 
 	nw := makeWatch(ctx, t, nodes, testNodeCopy.Name)
 	defer nw.Stop()
@@ -402,7 +410,7 @@ func TestManualConditionsPreserved(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := testclient.NewSimpleClientset()
+	c := testclient.NewClientset()
 
 	testP := &testNodeProvider{NodeProvider: &NaiveNodeProvider{}}
 
@@ -427,6 +435,14 @@ func TestManualConditionsPreserved(t *testing.T) {
 	}()
 
 	go node.Run(ctx) //nolint:errcheck
+
+	select {
+	case <-node.Ready():
+	case <-node.Done():
+		t.Fatalf("node.Run returned before becoming ready: %v", node.Err())
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for node to be ready")
+	}
 
 	nw := makeWatch(ctx, t, nodes, testNodeCopy.Name)
 	defer nw.Stop()
@@ -566,7 +582,7 @@ func TestNodePingSingleInflight(t *testing.T) {
 	defer cancel()
 
 	const pingTimeout = 100 * time.Millisecond
-	c := testclient.NewSimpleClientset()
+	c := testclient.NewClientset()
 	testP := &testNodeProviderPing{}
 
 	calls := newWaitableInt()
@@ -618,9 +634,12 @@ func TestNodePingSingleInflight(t *testing.T) {
 
 }
 
+// Subtest names contain a "/", which a node name cannot: the API server
+// requires a DNS subdomain. The fake clientset does not enforce that, so
+// flatten the separator to keep these names representative of real ones.
 func testNode(t *testing.T) *corev1.Node {
 	n := &corev1.Node{}
-	n.Name = strings.ToLower(t.Name())
+	n.Name = strings.ReplaceAll(strings.ToLower(t.Name()), "/", "-")
 	return n
 }
 
@@ -685,7 +704,7 @@ func makeWatch(ctx context.Context, t *testing.T, wc watchGetter, name string) w
 func atLeast(x, atLeast int) cmp.Comparison {
 	return func() cmp.Result {
 		if x < atLeast {
-			return cmp.ResultFailureTemplate(failTemplate("<"), map[string]interface{}{"x": x, "y": atLeast})
+			return cmp.ResultFailureTemplate(failTemplate("<"), map[string]any{"x": x, "y": atLeast})
 		}
 		return cmp.ResultSuccess
 	}
@@ -696,7 +715,7 @@ func before(x, y time.Time) cmp.Comparison {
 		if x.Before(y) {
 			return cmp.ResultSuccess
 		}
-		return cmp.ResultFailureTemplate(failTemplate(">="), map[string]interface{}{"x": x, "y": y})
+		return cmp.ResultFailureTemplate(failTemplate(">="), map[string]any{"x": x, "y": y})
 	}
 }
 
@@ -734,4 +753,54 @@ func failTemplate(op string) string {
 				{{- with callArg 1 }}{{ formatNode . }} {{end -}}
 				{{- printf "%T" .Data.y -}}
 			)`
+}
+
+func TestNewNodeControllerRequiresNamedNode(t *testing.T) {
+	nodes := testclient.NewSimpleClientset().CoreV1().Nodes()
+	testP := &testNodeProvider{NodeProvider: &NaiveNodeProvider{}}
+
+	_, err := NewNodeController(testP, nil, nodes)
+	assert.Error(t, err, "cannot create a node controller: node must not be nil")
+
+	// Empty and otherwise malformed names are both rejected: the API server
+	// validates node names as DNS subdomains, so neither could address a request.
+	for _, name := range []string{"", "Not_A_Subdomain", strings.Repeat("a", 254)} {
+		_, err = NewNodeController(testP, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}, nodes)
+		assert.ErrorContains(t, err, "cannot create a node controller: invalid node name")
+	}
+}
+
+// An API server response that is missing the node name must not replace the
+// cached node: the cache is the only source of the name used to address the
+// requests that would repair it, so caching an unnamed node is unrecoverable.
+func TestSetServerNodeRejectsUnusableNode(t *testing.T) {
+	ctx := context.Background()
+	n := &NodeController{serverNode: testNode(t)}
+	wantName := n.serverNode.Name
+
+	assert.Error(t, n.setServerNode(nil), "cannot cache the node returned by the API server: node must not be nil")
+	assert.ErrorContains(t, n.setServerNode(&corev1.Node{}), "cannot cache the node returned by the API server: invalid node name")
+	assert.ErrorContains(t, n.setServerNode(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "Not_A_Subdomain"}}),
+		"cannot cache the node returned by the API server: invalid node name")
+
+	// The last known good node is still cached, so the next attempt is addressable.
+	got, err := n.getServerNode(ctx)
+	assert.NilError(t, err)
+	assert.Equal(t, got.Name, wantName)
+
+	// ...and a well-formed response still updates the cache.
+	updated := testNode(t)
+	updated.Status.Phase = corev1.NodeRunning
+	assert.NilError(t, n.setServerNode(updated))
+
+	got, err = n.getServerNode(ctx)
+	assert.NilError(t, err)
+	assert.Equal(t, got.Name, wantName)
+	assert.Equal(t, got.Status.Phase, corev1.NodeRunning)
+}
+
+func TestGetServerNodeRejectsUnnamedCachedNode(t *testing.T) {
+	n := &NodeController{serverNode: &corev1.Node{}}
+	_, err := n.getServerNode(context.Background())
+	assert.ErrorContains(t, err, "cached server node is unusable: invalid node name")
 }
