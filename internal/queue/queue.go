@@ -342,13 +342,8 @@ func (q *Queue[K]) Run(ctx context.Context, workers int) {
 	<-ctx.Done()
 }
 
-<<<<<<< HEAD
 func (q *Queue[K]) worker(ctx context.Context, i int) {
-	ctx = log.WithLogger(ctx, log.G(ctx).WithFields(map[string]interface{}{
-=======
-func (q *Queue) worker(ctx context.Context, i int) {
 	ctx = log.WithLogger(ctx, log.G(ctx).WithFields(map[string]any{
->>>>>>> refs/remotes/upstream/main
 		"workerId": i,
 		"queue":    q.name,
 	}))

@@ -17,11 +17,7 @@ package node
 import (
 	"context"
 	"fmt"
-<<<<<<< HEAD
-=======
 	"sort"
-	"strings"
->>>>>>> refs/remotes/upstream/main
 	"time"
 
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
@@ -105,17 +101,12 @@ func (pc *PodController) createOrUpdatePod(ctx context.Context, pod *corev1.Pod)
 	// Check if the pod is already known by the provider.
 	// NOTE: Some providers return a non-nil error in their GetPod implementation when the pod is not found while some other don't.
 	// Hence, we ignore the error and just act upon the pod if it is non-nil (meaning that the provider still knows about the pod).
-<<<<<<< HEAD
 	if podFromProvider, _ := pc.provider.GetPodByUID(ctx, pod.Namespace, pod.Name, pod.UID); podFromProvider != nil {
-		if !podsEqual(podFromProvider, podForProvider) {
-=======
-	if podFromProvider, _ := pc.provider.GetPod(ctx, pod.Namespace, pod.Name); podFromProvider != nil {
 		podsEqualForProvider := podsEqual
 		if !pc.skipDownwardAPIResolution {
 			podsEqualForProvider = podsEqualWithResolvedEnvs
 		}
 		if !podsEqualForProvider(podFromProvider, podForProvider) {
->>>>>>> refs/remotes/upstream/main
 			log.G(ctx).Debugf("Pod %s exists, updating pod in provider", podFromProvider.Name)
 			if origErr := pc.provider.UpdatePod(ctx, podForProvider); origErr != nil {
 				pc.handleProviderError(ctx, span, origErr, pod)
@@ -358,13 +349,8 @@ func (pc *PodController) enqueuePodStatusUpdate(ctx context.Context, pod *corev1
 	key := newPodUIDKey(pod)
 	ctx = span.WithField(ctx, "key", key)
 
-<<<<<<< HEAD
 	var obj interface{}
 	err := wait.PollUntilContextCancel(ctx, notificationRetryPeriod, true, func(ctx context.Context) (bool, error) {
-=======
-	var obj any
-	err = wait.PollUntilContextCancel(ctx, notificationRetryPeriod, true, func(ctx context.Context) (bool, error) {
->>>>>>> refs/remotes/upstream/main
 		var ok bool
 		obj, ok = pc.knownPods.Load(key)
 		if ok {
@@ -461,7 +447,7 @@ func (pc *PodController) deletePodsFromKubernetesHandler(ctx context.Context, ke
 	defer func() {
 		if retErr == nil {
 			if w, ok := pc.provider.(syncWrapper); ok {
-				w._deletePodKey(ctx, metaKey)
+				w._deletePodKey(ctx, key)
 			}
 		}
 	}()

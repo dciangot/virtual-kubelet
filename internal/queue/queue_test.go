@@ -223,13 +223,8 @@ func TestQueueRedirty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
 	defer cancel()
 
-<<<<<<< HEAD
-	var times int64
-	var q *Queue[string]
-=======
 	var times atomic.Int64
-	var q *Queue
->>>>>>> refs/remotes/upstream/main
+	var q *Queue[string]
 	q = New(workqueue.DefaultTypedItemBasedRateLimiter[any](), t.Name(), func(ctx context.Context, key string) error {
 		assert.Assert(t, is.Equal(key, "foo"))
 		if times.Add(1) == 1 {
@@ -418,13 +413,8 @@ func TestQueueForgetInProgress(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-<<<<<<< HEAD
-	var times int64
-	var q *Queue[string]
-=======
 	var times atomic.Int64
-	var q *Queue
->>>>>>> refs/remotes/upstream/main
+	var q *Queue[string]
 	q = New(workqueue.DefaultTypedItemBasedRateLimiter[any](), t.Name(), func(ctx context.Context, key string) error {
 		assert.Assert(t, is.Equal(key, "foo"))
 		times.Add(1)

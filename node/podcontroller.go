@@ -374,11 +374,7 @@ func (pc *PodController) Run(ctx context.Context, podSyncWorkers int) (retErr er
 	// syncing.
 
 	var eventHandler cache.ResourceEventHandler = cache.ResourceEventHandlerFuncs{
-<<<<<<< HEAD
-		AddFunc: func(obj interface{}) {
-=======
-		AddFunc: func(pod any) {
->>>>>>> refs/remotes/upstream/main
+		AddFunc: func(obj any) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			ctx, span := trace.StartSpan(ctx, "AddFunc")
@@ -436,11 +432,7 @@ func (pc *PodController) Run(ctx context.Context, podSyncWorkers int) (retErr er
 				}
 			}
 		},
-<<<<<<< HEAD
-		DeleteFunc: func(obj interface{}) {
-=======
-		DeleteFunc: func(pod any) {
->>>>>>> refs/remotes/upstream/main
+		DeleteFunc: func(obj any) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			ctx, span := trace.StartSpan(ctx, "DeleteFunc")

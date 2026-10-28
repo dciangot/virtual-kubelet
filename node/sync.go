@@ -34,7 +34,7 @@ type syncProviderWrapper struct {
 	// deletedPods makes sure we don't set the "NotFound" status
 	// for pods which have been requested to be deleted.
 	// This is needed for our loop which just grabs pod statuses every 5 seconds.
-	// Keys are "namespace/name"; values are struct{}{} (existence only).
+	// Keys are pod UID keys and values are the deleted pods.
 	deletedPods sync.Map
 }
 
@@ -56,13 +56,8 @@ func (p *syncProviderWrapper) DeletePod(ctx context.Context, pod *corev1.Pod) er
 	log.G(ctx).Debug("syncProviderWrappper.DeletePod")
 	key := newPodUIDKey(pod)
 
-<<<<<<< HEAD
 	p.deletedPods.Store(key, pod)
 	if err := p.PodUIDLifecycleHandler.DeletePod(ctx, pod.DeepCopy()); err != nil {
-=======
-	p.deletedPods.Store(key, struct{}{})
-	if err := p.PodLifecycleHandler.DeletePod(ctx, pod.DeepCopy()); err != nil {
->>>>>>> refs/remotes/upstream/main
 		log.G(ctx).WithField("key", key).WithError(err).Debug("Removed key from deleted pods cache")
 		// We aren't going to actually delete the pod from the provider since there is an error so delete it from our cache,
 		// otherwise we could end up leaking pods in our deletion cache.

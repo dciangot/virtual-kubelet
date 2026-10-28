@@ -29,11 +29,8 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-<<<<<<< HEAD
 	"k8s.io/apimachinery/pkg/util/uuid"
-=======
 	"k8s.io/apimachinery/pkg/util/validation/field"
->>>>>>> refs/remotes/upstream/main
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	core "k8s.io/client-go/testing"
@@ -379,6 +376,7 @@ func TestPodNoSpecChangeWithNilVersusEmptyFields(t *testing.T) {
 	pod.Namespace = "default"
 	pod.Name = "nginx"
 	pod.Spec = newPodSpec()
+	pod.UID = uuid.NewUUID()
 
 	err := svr.createOrUpdatePod(context.Background(), pod.DeepCopy())
 	assert.Check(t, is.Nil(err))
@@ -420,6 +418,7 @@ func TestPodNoSpecChangeWithResolvedEnvOrderDifference(t *testing.T) {
 	pod.Namespace = "default"
 	pod.Name = "nginx"
 	pod.Spec = newPodSpec()
+	pod.UID = uuid.NewUUID()
 	pod.Spec.EnableServiceLinks = new(false)
 	pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{
 		ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -539,7 +538,7 @@ func TestUpdatePodStatusUsesKubernetesResourceVersion(t *testing.T) {
 	podFromProvider.ResourceVersion = "provider-rv"
 	podFromProvider.Status.Phase = corev1.PodRunning
 
-	key := fmt.Sprintf("%s/%s", k8sPod.Namespace, k8sPod.Name)
+	key := newPodUIDKey(podFromKubernetes)
 	c.knownPods.Store(key, &knownPod{lastPodStatusReceivedFromProvider: podFromProvider})
 
 	var gotResourceVersion string
@@ -593,7 +592,7 @@ func TestUpdatePodStatusRejectsZeroResourceVersion(t *testing.T) {
 	podFromProvider.ResourceVersion = "0"
 	podFromProvider.Status.Phase = corev1.PodRunning
 
-	key := fmt.Sprintf("%s/%s", k8sPod.Namespace, k8sPod.Name)
+	key := newPodUIDKey(k8sPod)
 	c.knownPods.Store(key, &knownPod{lastPodStatusReceivedFromProvider: podFromProvider})
 
 	// Reactor that mirrors the 1.34 apiserver: reject any UpdateStatus where
@@ -636,7 +635,7 @@ func TestUpdatePodStatusRejectsZeroResourceVersion(t *testing.T) {
 func TestUpdatePodStatusFromSyncProviderKeepsMetadata(t *testing.T) {
 	ctx := context.Background()
 	c := newTestController()
-	c.provider = &syncProviderWrapper{PodLifecycleHandler: newSyncMockProvider()}
+	c.provider = &syncProviderWrapper{PodUIDLifecycleHandler: newSyncMockProvider()}
 
 	k8sPod := &corev1.Pod{}
 	k8sPod.Namespace = "default"
@@ -657,7 +656,7 @@ func TestUpdatePodStatusFromSyncProviderKeepsMetadata(t *testing.T) {
 	podFromProvider.Annotations = map[string]string{"controller.kubernetes.io/pod-deletion-cost": "201"}
 	podFromProvider.Status.Phase = corev1.PodRunning
 
-	key := fmt.Sprintf("%s/%s", k8sPod.Namespace, k8sPod.Name)
+	key := newPodUIDKey(k8sPod)
 	c.knownPods.Store(key, &knownPod{lastPodStatusReceivedFromProvider: podFromProvider})
 
 	err := c.updatePodStatus(ctx, k8sPod.DeepCopy(), key)
@@ -832,14 +831,14 @@ func TestDeletedPodsMapCleansUpOnSyncProvider(t *testing.T) {
 	wrapper := &syncProviderWrapper{}
 	pc := &PodController{provider: wrapper, podsLister: lister}
 
-	const metaKey = "default/any-pod"
-	wrapper.deletedPods.Store(metaKey, struct{}{})
+	key := podUIDKey{Namespace: "default", Name: "any-pod", UID: "any-uid"}
+	wrapper.deletedPods.Store(key, struct{}{})
 
-	if err := pc.deletePodsFromKubernetesHandler(ctx, metaKey+"/any-uid"); err != nil {
+	if err := pc.deletePodsFromKubernetesHandler(ctx, key); err != nil {
 		t.Fatal(err)
 	}
 
-	_, stillExists := wrapper.deletedPods.Load(metaKey)
+	_, stillExists := wrapper.deletedPods.Load(key)
 	assert.Assert(t, !stillExists)
 }
 
